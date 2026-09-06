@@ -121,6 +121,10 @@ export default function RunningScreen() {
   const [targetPoints, setTargetPoints] = useState<TargetPoint[]>([]);
   const [newPointNameInput, setNewPointNameInput] = useState<string>('');
 
+  // Autocomplete Place Suggestions State (Estilo Google Maps)
+  const [placeSuggestions, setPlaceSuggestions] = useState<Array<{ place_id: string; display_name: string; lat: string; lon: string }>>([]);
+  const [isSearchingPlaces, setIsSearchingPlaces] = useState<boolean>(false);
+
   // CACO (Caminar-Correr) Interval Engine Config
   const [cacoModalVisible, setCacoModalVisible] = useState<boolean>(false);
   const [totalIntervals, setTotalIntervals] = useState<number>(6);
@@ -133,6 +137,45 @@ export default function RunningScreen() {
   const [phaseSecondsLeft, setPhaseSecondsLeft] = useState<number>(3 * 60);
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+
+  // Real-time Debounced Place Autocomplete Search Effect
+  useEffect(() => {
+    let active = true;
+    const query = newPointNameInput.trim();
+
+    if (query.length < 3) {
+      setPlaceSuggestions([]);
+      setIsSearchingPlaces(false);
+      return;
+    }
+
+    setIsSearchingPlaces(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+          {
+            headers: { 'User-Agent': 'AngelFitnessApp/1.0' },
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (active && Array.isArray(data)) {
+            setPlaceSuggestions(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Error al buscar sugerencias de lugares:', err);
+      } finally {
+        if (active) setIsSearchingPlaces(false);
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [newPointNameInput]);
 
   // Function to acquire initial GPS location
   const requestLocationAndInitialize = async () => {
@@ -281,7 +324,7 @@ export default function RunningScreen() {
     let pointCoord: Coord | null = customCoord || currentLocation;
     const nameInput = (customName || newPointNameInput).trim();
 
-    // Geocode place name if typed by user
+    // Geocode place name if typed by user and not selected via suggestion
     if (!customCoord && nameInput) {
       try {
         setGpsStatus('Buscando coordenadas...');
@@ -313,6 +356,7 @@ export default function RunningScreen() {
 
     setTargetPoints((prev) => [...prev, newPoint]);
     setNewPointNameInput('');
+    setPlaceSuggestions([]);
     setGpsStatus('Punto Objetivo Marcado');
 
     if (Platform.OS !== 'web') {
@@ -323,6 +367,20 @@ export default function RunningScreen() {
       '¡Punto GPS Marcado en el Mapa!',
       `Se colocó el marcador "${name}" en las coordenadas (${pointCoord.latitude.toFixed(4)}, ${pointCoord.longitude.toFixed(4)}).`
     );
+  };
+
+  // Handle selecting a place from Google Maps-style autocomplete dropdown
+  const handleSelectPlaceSuggestion = (item: { display_name: string; lat: string; lon: string }) => {
+    const lat = parseFloat(item.lat);
+    const lon = parseFloat(item.lon);
+    if (isNaN(lat) || isNaN(lon)) return;
+
+    const shortName = item.display_name.split(',')[0] || 'Lugar Seleccionado';
+    const pointCoord = { latitude: lat, longitude: lon };
+
+    setCurrentLocation(pointCoord);
+    handleAddCurrentGpsAsTarget(pointCoord, shortName);
+    setPlaceSuggestions([]);
   };
 
   const handleRemoveTargetPoint = (id: string) => {
@@ -567,11 +625,9 @@ export default function RunningScreen() {
             </View>
 
             <View style={{ flexDirection: 'row', gap: 6, marginLeft: 8 }}>
-              <Pressable style={styles.configBtn} onPress={() => handleAddCurrentGpsAsTarget()}>
-                <MaterialIcons name="add-location" size={16} color={Colors.primaryContainer} />
-              </Pressable>
               <Pressable style={styles.configBtn} onPress={() => setObjectiveModalVisible(true)}>
-                <Text style={styles.configBtnText}>Ajustar</Text>
+                <MaterialIcons name="search" size={16} color={Colors.primaryContainer} />
+                <Text style={styles.configBtnText}>Buscar Lugar</Text>
               </Pressable>
             </View>
           </View>
@@ -794,8 +850,53 @@ export default function RunningScreen() {
               </View>
 
               <Text style={styles.modalDesc}>
-                Define tu distancia meta y añade puntos GPS objetivo (waypoints) en el mapa.
+                Busca un lugar específico en tiempo real (estilo Google Maps) para colocar la ubicación exacta en el mapa.
               </Text>
+
+              {/* Real-time Place Autocomplete Search Bar */}
+              <View style={[styles.inputGroup, { zIndex: 100 }]}>
+                <Text style={styles.inputLabel}>BUSCAR LUGAR O DIRECCIÓN EN EL MAPA</Text>
+                <View style={styles.searchPlaceInputWrapper}>
+                  <MaterialIcons name="search" size={20} color={Colors.primaryContainer} style={{ marginLeft: 12 }} />
+                  <TextInput
+                    style={styles.searchPlaceInput}
+                    placeholder="Escribe un lugar (ej. Parque Central, Estadio)..."
+                    placeholderTextColor={Colors.outline}
+                    value={newPointNameInput}
+                    onChangeText={setNewPointNameInput}
+                  />
+                  {isSearchingPlaces ? (
+                    <ActivityIndicator size="small" color={Colors.primaryContainer} style={{ marginRight: 10 }} />
+                  ) : newPointNameInput.length > 0 ? (
+                    <Pressable onPress={() => { setNewPointNameInput(''); setPlaceSuggestions([]); }}>
+                      <MaterialIcons name="close" size={18} color={Colors.onSurfaceVariant} style={{ marginRight: 10 }} />
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                {/* Autocomplete Dropdown List */}
+                {placeSuggestions.length > 0 && (
+                  <View style={styles.suggestionsContainer}>
+                    {placeSuggestions.map((item) => (
+                      <Pressable
+                        key={item.place_id}
+                        style={styles.suggestionRow}
+                        onPress={() => handleSelectPlaceSuggestion(item)}>
+                        <MaterialIcons name="place" size={20} color={Colors.primaryContainer} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.suggestionTitle} numberOfLines={1}>
+                            {item.display_name.split(',')[0]}
+                          </Text>
+                          <Text style={styles.suggestionSub} numberOfLines={1}>
+                            {item.display_name}
+                          </Text>
+                        </View>
+                        <MaterialIcons name="arrow-forward" size={14} color={Colors.onSurfaceVariant} />
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
 
               {/* Preset Distance Selector */}
               <View style={styles.inputGroup}>
@@ -825,24 +926,14 @@ export default function RunningScreen() {
                 />
               </View>
 
-              {/* Add Waypoint Section */}
+              {/* Quick Add Current Location Button */}
               <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>MARCAR NUEVO PUNTO OBJETIVO EN GPS</Text>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TextInput
-                    style={[styles.modalInput, { flex: 1 }]}
-                    placeholder="Ej. Meta Parque / Checkpoint"
-                    placeholderTextColor={Colors.outline}
-                    value={newPointNameInput}
-                    onChangeText={setNewPointNameInput}
-                  />
-                  <Pressable
-                    style={styles.addPointBtn}
-                    onPress={() => handleAddCurrentGpsAsTarget()}>
-                    <MaterialIcons name="add-location" size={18} color={Colors.onPrimaryContainer} />
-                    <Text style={styles.addPointBtnText}>+ Guardar</Text>
-                  </Pressable>
-                </View>
+                <Pressable
+                  style={styles.addPointBtnFull}
+                  onPress={() => handleAddCurrentGpsAsTarget()}>
+                  <MaterialIcons name="my-location" size={18} color={Colors.onPrimaryContainer} />
+                  <Text style={styles.addPointBtnText}>+ Marcar Mi Ubicación GPS Actual</Text>
+                </Pressable>
               </View>
 
               {/* Target Points List */}
@@ -1454,17 +1545,62 @@ const styles = StyleSheet.create({
     color: Colors.onPrimaryContainer,
     fontWeight: '900',
   },
-  addPointBtn: {
+  searchPlaceInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: Colors.primaryContainer,
-    paddingHorizontal: 12,
-    borderRadius: Radii.md,
+    backgroundColor: Colors.surfaceContainerLow,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
+    height: 48,
+  },
+  searchPlaceInput: {
+    flex: 1,
+    color: Colors.onSurface,
+    fontSize: 14,
+    paddingHorizontal: Spacing.sm,
+  },
+  suggestionsContainer: {
+    backgroundColor: Colors.surfaceContainerHigh,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.primaryContainer,
+    marginTop: 4,
+    overflow: 'hidden',
+    elevation: 6,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderTranslucent,
+  },
+  suggestionTitle: {
+    color: Colors.onSurface,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  suggestionSub: {
+    color: Colors.onSurfaceVariant,
+    fontSize: 10,
+    marginTop: 1,
+  },
+  addPointBtnFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.surfaceBright,
+    paddingVertical: 12,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.activeBorderTranslucent,
   },
   addPointBtnText: {
     color: Colors.onPrimaryContainer,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
   },
   pointItemRow: {
