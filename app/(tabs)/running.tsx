@@ -12,8 +12,10 @@ import {
   TextInput,
   Vibration,
   Linking,
+  Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Radii, Spacing } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -25,6 +27,63 @@ interface Coord {
   latitude: number;
   longitude: number;
 }
+
+// Estilo de Mapa Oscuro Kinetic (Dark Mode) para react-native-maps
+const darkMapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#0A0E17' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#74839A' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#0A0E17' }] },
+  {
+    featureType: 'administrative.locality',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#10B981' }],
+  },
+  {
+    featureType: 'poi',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#10B981' }],
+  },
+  {
+    featureType: 'poi.park',
+    elementType: 'geometry',
+    stylers: [{ color: '#131B2E' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [{ color: '#1E293B' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#0F172A' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#94A3B8' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry',
+    stylers: [{ color: '#334155' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#1E293B' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'geometry',
+    stylers: [{ color: '#090D16' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#475569' }],
+  },
+];
 
 // Calculate Haversine distance between two coordinates in kilometers
 function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -47,12 +106,14 @@ export default function RunningScreen() {
   const [totalSeconds, setTotalSeconds] = useState<number>(0);
   const [isLocked, setIsLocked] = useState<boolean>(false);
 
-  // GPS Telemetry
+  // GPS Telemetry & Current Location State
+  const [currentLocation, setCurrentLocation] = useState<Coord | null>(null);
   const [coords, setCoords] = useState<Coord[]>([]);
   const [distance, setDistance] = useState<number>(0.0);
   const [calories, setCalories] = useState<number>(0);
   const [gpsStatus, setGpsStatus] = useState<string>('Esperando GPS...');
   const [savingSession, setSavingSession] = useState<boolean>(false);
+  const [loadingInitialLocation, setLoadingInitialLocation] = useState<boolean>(true);
 
   // CACO (Caminar-Correr) Interval Engine Config
   const [cacoModalVisible, setCacoModalVisible] = useState<boolean>(false);
@@ -67,24 +128,54 @@ export default function RunningScreen() {
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
 
+  // Function to acquire initial GPS location
+  const requestLocationAndInitialize = async () => {
+    try {
+      setLoadingInitialLocation(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setGpsStatus('Permiso GPS Denegado');
+        Alert.alert(
+          'Permiso de Ubicación Necesario',
+          'Habilita el permiso de ubicación en los Ajustes de iOS para ver el mapa y rastrear tu recorrido.'
+        );
+        setLoadingInitialLocation(false);
+        return;
+      }
+
+      setGpsStatus('Obteniendo posición GPS...');
+
+      let loc: Location.LocationObject | null = null;
+      try {
+        loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+      } catch (e) {
+        loc = await Location.getLastKnownPositionAsync({});
+      }
+
+      if (loc && loc.coords) {
+        const initCoord = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        };
+        setCurrentLocation(initCoord);
+        setCoords((prev) => (prev.length === 0 ? [initCoord] : prev));
+        setGpsStatus('GPS 5G • Listo');
+      } else {
+        setGpsStatus('GPS Listo (Pulsa Iniciar para conectar)');
+      }
+    } catch (err) {
+      console.warn('Error obteniendo ubicación inicial:', err);
+      setGpsStatus('GPS Listo (Conectando satélites)');
+    } finally {
+      setLoadingInitialLocation(false);
+    }
+  };
+
   // Request GPS Permissions on Mount
   useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          setGpsStatus('Permiso GPS Denegado');
-          Alert.alert(
-            'Permiso de Ubicación Necesario',
-            'Habilita el permiso de ubicación para rastrear la distancia real y ritmo con el GPS.'
-          );
-        } else {
-          setGpsStatus('GPS 5G • Listo');
-        }
-      } catch (err) {
-        console.warn('Error solicitando permisos de ubicación:', err);
-      }
-    })();
+    requestLocationAndInitialize();
   }, []);
 
   // GPS Watcher Effect
@@ -99,25 +190,30 @@ export default function RunningScreen() {
         locationSubscription.current = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
-            timeInterval: 1500,
-            distanceInterval: 3,
+            timeInterval: 1000,
+            distanceInterval: 2,
           },
           (loc) => {
             if (!isSubscribed) return;
             const { latitude, longitude } = loc.coords;
+            const newCoord = { latitude, longitude };
+
+            setCurrentLocation(newCoord);
 
             setCoords((prev) => {
               if (prev.length > 0) {
                 const last = prev[prev.length - 1];
                 const addedDist = getHaversineDistance(last.latitude, last.longitude, latitude, longitude);
-                if (addedDist > 0.002) { // 2 meters threshold to avoid noise
+                if (addedDist > 0.001) { // 1 meter threshold to avoid noise
                   setDistance((d) => parseFloat((d + addedDist).toFixed(2)));
                   setCalories((c) => Math.round(c + addedDist * 65));
+                  return [...prev, newCoord];
                 }
+                return prev;
               }
-              return [...prev, { latitude, longitude }];
+              return [newCoord];
             });
-            setGpsStatus('GPS Activo • Conectado');
+            setGpsStatus('GPS Activo • Rastreando');
           }
         );
       } catch (err) {
@@ -153,7 +249,9 @@ export default function RunningScreen() {
           setPhaseSecondsLeft((prevPhaseSec) => {
             if (prevPhaseSec <= 1) {
               // Trigger vibration feedback on transition
-              Vibration.vibrate([0, 400, 200, 400]);
+              if (Platform.OS !== 'web') {
+                Vibration.vibrate([0, 400, 200, 400]);
+              }
 
               if (cacoPhase === 'caminar') {
                 setCacoPhase('correr');
@@ -214,7 +312,7 @@ export default function RunningScreen() {
             setTotalSeconds(0);
             setDistance(0.0);
             setCalories(0);
-            setCoords([]);
+            setCoords(currentLocation ? [currentLocation] : []);
             setCurrentInterval(1);
             setCacoPhase('correr');
             setPhaseSecondsLeft(runMinutes * 60);
@@ -273,7 +371,7 @@ export default function RunningScreen() {
           setTotalSeconds(0);
           setDistance(0.0);
           setCalories(0);
-          setCoords([]);
+          setCoords(currentLocation ? [currentLocation] : []);
           setCurrentInterval(1);
         }
       }
@@ -283,6 +381,90 @@ export default function RunningScreen() {
     } finally {
       setSavingSession(false);
     }
+  };
+
+  // Render Map View component for Web or Native
+  const renderMapView = () => {
+    if (loadingInitialLocation) {
+      return (
+        <View style={styles.mapLoadingBox}>
+          <ActivityIndicator size="large" color={Colors.primaryContainer} />
+          <Text style={styles.mapLoadingText}>Buscando satélites y fijando mapa GPS...</Text>
+        </View>
+      );
+    }
+
+    if (!currentLocation) {
+      return (
+        <View style={styles.mapLoadingBox}>
+          <MaterialIcons name="location-off" size={40} color={Colors.outline} />
+          <Text style={styles.mapLoadingText}>Ubicación GPS no fijada</Text>
+          <Pressable style={styles.recenterBtn} onPress={requestLocationAndInitialize}>
+            <Text style={styles.recenterBtnText}>Obtener Mi Ubicación</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    // WEB FALLBACK (OpenStreetMap embed)
+    if (Platform.OS === 'web') {
+      const { latitude, longitude } = currentLocation;
+      const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - 0.005}%2C${latitude - 0.005}%2C${longitude + 0.005}%2C${latitude + 0.005}&layer=mapnik&marker=${latitude}%2C${longitude}`;
+
+      return (
+        <View style={styles.webMapContainer}>
+          {/* @ts-ignore iframe is supported on web */}
+          <iframe
+            src={mapUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 0,
+              borderRadius: Radii.xl,
+              filter: 'invert(90%) hue-rotate(180deg) brightness(95%) contrast(90%)',
+            }}
+            title="OpenStreetMap Web"
+          />
+        </View>
+      );
+    }
+
+    // NATIVE MAP (iOS / Android react-native-maps)
+    return (
+      <MapView
+        style={StyleSheet.absoluteFill}
+        provider={PROVIDER_DEFAULT}
+        customMapStyle={darkMapStyle}
+        initialRegion={{
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
+        }}
+        region={{
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
+        }}
+        showsUserLocation={true}
+        showsMyLocationButton={true}
+        showsCompass={true}
+        followsUserLocation={isRunning}>
+        {coords.length > 1 && (
+          <Polyline
+            coordinates={coords}
+            strokeColor={Colors.primaryContainer}
+            strokeWidth={5}
+          />
+        )}
+        <Marker
+          coordinate={currentLocation}
+          title="Tu Ubicación"
+          description={`${distance.toFixed(2)} km recorridos`}
+        />
+      </MapView>
+    );
   };
 
   return (
@@ -296,7 +478,7 @@ export default function RunningScreen() {
             </View>
             <View>
               <Text style={styles.brandTitle}>ANGEL RUNNING</Text>
-              <Text style={styles.brandSub}>GPS REAL & TELEMETRÍA EN VIVO</Text>
+              <Text style={styles.brandSub}>MAPA INTERACTIVO & GPS EN VIVO</Text>
             </View>
           </View>
           <View style={styles.gpsSignalBox}>
@@ -361,37 +543,19 @@ export default function RunningScreen() {
           </View>
         )}
 
-        {/* GPS Map Visual Canvas Card */}
+        {/* Real Interactive GPS Map Container */}
         <View style={styles.mapCard}>
-          <View style={styles.mapBackground}>
-            <MaterialCommunityIcons name="map-marker-path" size={110} color={`${Colors.primaryContainer}15`} />
-          </View>
+          {renderMapView()}
 
+          {/* Map Top Header Overlay */}
           <View style={styles.mapTopOverlay}>
             <View style={styles.elevationBadge}>
               <MaterialCommunityIcons name="satellite-variant" size={14} color={Colors.primaryContainer} />
               <Text style={styles.elevationText}>{coords.length} Puntos GPS</Text>
             </View>
-            <View style={styles.northCompass}>
-              <Text style={styles.compassText}>N</Text>
-            </View>
-          </View>
-
-          {/* Center Live Pin */}
-          <View style={styles.centerPinWrap}>
-            <View style={[styles.pinPulse, isRunning && { backgroundColor: `${Colors.primaryContainer}40` }]} />
-            <View style={styles.pinCircle}>
-              <MaterialCommunityIcons
-                name={runningMode === 'caco' && cacoPhase === 'caminar' ? 'walk' : 'run'}
-                size={18}
-                color={Colors.onPrimaryContainer}
-              />
-            </View>
-            <View style={styles.pinLabel}>
-              <Text style={styles.pinLabelText}>
-                {isRunning ? (cacoPhase === 'caminar' ? 'Caminando' : 'Corriendo') : 'En Pausa'}
-              </Text>
-            </View>
+            <Pressable style={styles.northCompass} onPress={requestLocationAndInitialize}>
+              <MaterialIcons name="my-location" size={16} color={Colors.primaryContainer} />
+            </Pressable>
           </View>
 
           {/* Bottom Distance Overlay */}
@@ -765,7 +929,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   mapCard: {
-    height: 180,
+    height: 240,
     backgroundColor: Colors.surfaceContainerLowest,
     borderRadius: Radii.xl,
     overflow: 'hidden',
@@ -773,13 +937,35 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.borderTranslucent,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  mapBackground: {
-    ...StyleSheet.absoluteFill,
+  webMapContainer: {
+    width: '100%',
+    height: '100%',
+  },
+  mapLoadingBox: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: Spacing.md,
+    gap: 8,
+  },
+  mapLoadingText: {
+    color: Colors.onSurfaceVariant,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  recenterBtn: {
+    backgroundColor: Colors.primaryContainer,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radii.full,
+    marginTop: 4,
+  },
+  recenterBtnText: {
+    color: Colors.onPrimaryContainer,
+    fontSize: 11,
+    fontWeight: '800',
   },
   mapTopOverlay: {
     position: 'absolute',
@@ -788,11 +974,12 @@ const styles = StyleSheet.create({
     right: 12,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    zIndex: 10,
   },
   elevationBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(38, 42, 52, 0.85)',
+    backgroundColor: 'rgba(10, 14, 23, 0.85)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: Radii.full,
@@ -804,60 +991,25 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   northCompass: {
-    width: 28,
-    height: 28,
-    borderRadius: Radii.full,
-    backgroundColor: 'rgba(38, 42, 52, 0.85)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  compassText: {
-    color: Colors.primaryContainer,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  centerPinWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pinPulse: {
-    position: 'absolute',
-    width: 44,
-    height: 44,
-    borderRadius: Radii.full,
-    backgroundColor: `${Colors.primaryContainer}20`,
-  },
-  pinCircle: {
     width: 32,
     height: 32,
     borderRadius: Radii.full,
-    backgroundColor: Colors.primaryContainer,
+    backgroundColor: 'rgba(10, 14, 23, 0.85)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  pinLabel: {
-    backgroundColor: Colors.surfaceContainerHigh,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: Radii.full,
-    marginTop: 6,
-  },
-  pinLabelText: {
-    color: Colors.primaryContainer,
-    fontSize: 10,
-    fontWeight: '700',
   },
   mapBottomPin: {
     position: 'absolute',
     bottom: 12,
-    right: 12,
-    backgroundColor: 'rgba(38, 42, 52, 0.9)',
-    paddingHorizontal: 10,
+    left: 12,
+    backgroundColor: 'rgba(10, 14, 23, 0.85)',
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: Radii.lg,
+    borderRadius: Radii.full,
     flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
+    alignItems: 'center',
+    gap: 6,
+    zIndex: 10,
   },
   mapDistanceVal: {
     color: Colors.onSurface,
@@ -865,50 +1017,58 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   mapDistanceUnit: {
-    color: Colors.onSurfaceVariant,
+    color: Colors.primaryContainer,
     fontSize: 11,
+    fontWeight: '700',
   },
   telemetryHUD: {
-    gap: Spacing.xs,
     marginBottom: Spacing.md,
   },
   timerCard: {
-    backgroundColor: Colors.surfaceContainerLow,
+    backgroundColor: Colors.surfaceContainer,
     borderRadius: Radii.xl,
     padding: Spacing.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
   },
   hudLabel: {
     color: Colors.onSurfaceVariant,
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
   displayTimer: {
     color: Colors.onSurface,
-    fontSize: 34,
+    fontSize: 32,
     fontWeight: '900',
-    letterSpacing: -1,
+    letterSpacing: 1,
+    marginTop: 2,
   },
   intervalSub: {
-    color: Colors.onSurfaceVariant,
-    fontSize: 11,
+    color: Colors.primaryContainer,
+    fontSize: 10,
+    fontWeight: '800',
   },
   intervalTitle: {
-    color: Colors.primaryContainer,
-    fontSize: 14,
+    color: Colors.onSurface,
+    fontSize: 16,
     fontWeight: '800',
+    marginTop: 2,
   },
   hudGrid: {
     flexDirection: 'row',
-    gap: Spacing.xs,
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
   },
   hudBox: {
     flex: 1,
     backgroundColor: Colors.surfaceContainer,
-    padding: Spacing.md,
     borderRadius: Radii.xl,
+    padding: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.borderTranslucent,
   },
@@ -922,35 +1082,36 @@ const styles = StyleSheet.create({
     color: Colors.onSurfaceVariant,
     fontSize: 9,
     fontWeight: '800',
+    letterSpacing: 0.5,
   },
   hudBoxBigVal: {
     color: Colors.onSurface,
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '900',
   },
   hudBoxUnit: {
-    color: Colors.onSurfaceVariant,
-    fontSize: 11,
-    marginTop: -2,
+    color: Colors.primaryContainer,
+    fontSize: 10,
+    fontWeight: '700',
   },
   microMetricsRow: {
     flexDirection: 'row',
-    gap: Spacing.xs,
+    gap: Spacing.sm,
   },
   microBox: {
     flex: 1,
-    backgroundColor: Colors.surfaceContainerLow,
-    padding: Spacing.sm,
-    borderRadius: Radii.lg,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    backgroundColor: Colors.surfaceContainerLow,
+    borderRadius: Radii.lg,
+    padding: Spacing.sm,
   },
   microIconWrap: {
     width: 32,
     height: 32,
     borderRadius: Radii.md,
-    backgroundColor: Colors.surfaceContainerHigh,
+    backgroundColor: Colors.surfaceBright,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -964,17 +1125,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   microUnit: {
+    color: Colors.primaryContainer,
     fontSize: 10,
-    color: Colors.onSurfaceVariant,
-    fontWeight: '400',
+    fontWeight: '600',
   },
   audioBar: {
-    backgroundColor: Colors.surfaceContainerHigh,
-    padding: Spacing.md,
-    borderRadius: Radii.xl,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: Colors.surfaceContainerHigh,
+    borderRadius: Radii.lg,
+    padding: Spacing.md,
     marginBottom: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.borderTranslucent,
@@ -982,14 +1143,14 @@ const styles = StyleSheet.create({
   audioLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     flex: 1,
   },
   audioIconBox: {
     width: 36,
     height: 36,
     borderRadius: Radii.md,
-    backgroundColor: Colors.surfaceContainer,
+    backgroundColor: Colors.surfaceBright,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1005,41 +1166,43 @@ const styles = StyleSheet.create({
   actionBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.xs,
+    gap: Spacing.sm,
     marginBottom: Spacing.md,
   },
   actionBtnSide: {
     flex: 1,
-    height: 52,
-    backgroundColor: Colors.surfaceContainerHigh,
-    borderRadius: Radii.xl,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  actionBtnDisabled: {
-    opacity: 0.5,
+    gap: 8,
+    backgroundColor: Colors.surfaceContainer,
+    borderRadius: Radii.xl,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
   },
   actionBtnLabel: {
     color: Colors.onSurfaceVariant,
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   actionBtnVal: {
     color: Colors.onSurface,
     fontSize: 12,
     fontWeight: '700',
   },
+  actionBtnDisabled: {
+    opacity: 0.5,
+  },
   actionBtnMaster: {
-    flex: 1.5,
-    height: 56,
-    backgroundColor: Colors.primaryContainer,
-    borderRadius: Radii.full,
+    flex: 1.4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    backgroundColor: Colors.primaryContainer,
+    borderRadius: Radii.xl,
+    paddingVertical: 14,
   },
   actionBtnMasterPaused: {
     backgroundColor: Colors.secondary,
@@ -1047,45 +1210,42 @@ const styles = StyleSheet.create({
   masterBtnText: {
     color: Colors.onPrimaryContainer,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
   finishRunSection: {
-    marginTop: Spacing.xs,
+    marginBottom: Spacing.md,
   },
   finishRunBtn: {
-    height: 52,
-    borderRadius: Radii.full,
-    backgroundColor: Colors.primaryContainer,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    backgroundColor: Colors.primaryContainer,
+    borderRadius: Radii.xl,
+    paddingVertical: 14,
   },
   finishRunBtnText: {
     color: Colors.onPrimaryContainer,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.md,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
-    width: '100%',
     backgroundColor: Colors.surfaceContainer,
-    borderRadius: Radii.xl,
+    borderTopLeftRadius: Radii.xxl,
+    borderTopRightRadius: Radii.xxl,
     padding: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.borderTranslucent,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.xs,
   },
   modalTitle: {
     color: Colors.onSurface,
@@ -1095,34 +1255,36 @@ const styles = StyleSheet.create({
   modalDesc: {
     color: Colors.onSurfaceVariant,
     fontSize: 12,
-    lineHeight: 18,
     marginBottom: Spacing.md,
+    lineHeight: 18,
   },
   inputGroup: {
-    marginBottom: Spacing.sm,
-    gap: 4,
+    marginBottom: Spacing.md,
   },
   inputLabel: {
-    color: Colors.onSurfaceVariant,
+    color: Colors.primaryContainer,
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    marginBottom: 6,
   },
   modalInput: {
     backgroundColor: Colors.surfaceContainerLow,
-    borderRadius: Radii.lg,
-    height: 46,
+    borderRadius: Radii.md,
     paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
     color: Colors.onSurface,
     fontSize: 16,
     fontWeight: '700',
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
   },
   saveCacoBtn: {
     backgroundColor: Colors.primaryContainer,
-    height: 50,
-    borderRadius: Radii.full,
+    borderRadius: Radii.xl,
+    paddingVertical: 14,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: Spacing.md,
+    marginTop: Spacing.sm,
   },
   saveCacoBtnText: {
     color: Colors.onPrimaryContainer,

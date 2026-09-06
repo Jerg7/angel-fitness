@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
@@ -247,26 +248,34 @@ export default function ProfileScreen() {
   };
 
   const handleSignOut = () => {
-    Alert.alert(
-      'Cerrar Sesión',
-      '¿Estás seguro de que deseas salir de tu cuenta en ANGEL?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Cerrar Sesión',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await supabase.auth.signOut();
-              router.replace('/auth');
-            } catch (err: any) {
-              console.error('Error al cerrar sesión:', err);
-              Alert.alert('Error', err.message || 'No se pudo cerrar la sesión.');
-            }
+    const doSignOut = async () => {
+      try {
+        await supabase.auth.signOut();
+        router.replace('/auth');
+      } catch (err: any) {
+        console.error('Error al cerrar sesión:', err);
+        Alert.alert('Error', err.message || 'No se pudo cerrar la sesión.');
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('¿Estás seguro de que deseas salir de tu cuenta en ANGEL?')) {
+        doSignOut();
+      }
+    } else {
+      Alert.alert(
+        'Cerrar Sesión',
+        '¿Estás seguro de que deseas salir de tu cuenta en ANGEL?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Cerrar Sesión',
+            style: 'destructive',
+            onPress: doSignOut,
           },
-        },
-      ]
-    );
+        ]
+      );
+    }
   };
 
   // Derive weight stats

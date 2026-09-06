@@ -14,7 +14,11 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "ANGEL necesita acceso a tu ubicación para medir la distancia y ritmo de tus carreras en tiempo real y mostrar tu ruta en el mapa.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "ANGEL necesita acceso a tu ubicación para medir la distancia y ritmo de tus carreras en tiempo real."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +26,11 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -35,7 +43,13 @@
       "expo-splash-screen",
       "expo-status-bar",
       "expo-web-browser",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Permite a ANGEL acceder a tu ubicación para rastrear tus carreras y calcular la distancia y ritmo en tiempo real."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

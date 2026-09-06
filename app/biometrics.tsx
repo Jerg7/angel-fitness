@@ -221,7 +221,7 @@ export default function BiometricsScreen() {
             <Text style={styles.brandSubtitle}>KINETIC</Text>
           </View>
           <View style={styles.stepBadge}>
-            <Text style={styles.stepBadgeText}>PASO 2 DE 4</Text>
+            <Text style={styles.stepBadgeText}>PASO 2 DE 2</Text>
           </View>
         </View>
 
@@ -229,10 +229,10 @@ export default function BiometricsScreen() {
         <View style={styles.progressContainer}>
           <View style={styles.progressHeader}>
             <Text style={styles.progressLabel}>EVALUACIÓN BIOMÉTRICA</Text>
-            <Text style={styles.progressPercent}>50% Completado</Text>
+            <Text style={styles.progressPercent}>Paso 2 de 2 • 100%</Text>
           </View>
           <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: '50%' }]} />
+            <View style={[styles.progressFill, { width: '100%' }]} />
           </View>
         </View>
 

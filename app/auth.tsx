@@ -96,14 +96,12 @@ export default function AuthScreen() {
           let { error: profileError } = await supabase.from('profiles').upsert(profilePayload);
 
           if (profileError && profileError.message?.includes('birth_date')) {
-            // Fallback if birth_date column doesn't exist in Supabase DB schema
             delete profilePayload.birth_date;
             const retry = await supabase.from('profiles').upsert(profilePayload);
             profileError = retry.error;
           }
 
           if (profileError && profileError.message?.includes('full_name')) {
-            // Fallback if full_name column doesn't exist in Supabase DB schema
             delete profilePayload.full_name;
             const retry2 = await supabase.from('profiles').upsert(profilePayload);
             profileError = retry2.error;
@@ -176,7 +174,7 @@ export default function AuthScreen() {
               </View>
             </View>
             <View style={styles.stepBadge}>
-              <Text style={styles.stepBadgeText}>PASO 1 DE 4</Text>
+              <Text style={styles.stepBadgeText}>PASO 1 DE 2</Text>
             </View>
           </View>
 
@@ -261,9 +259,9 @@ export default function AuthScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>FECHA DE NACIMIENTO</Text>
                 <View style={styles.dateRow}>
-                  <View style={[styles.inputWrapper, { flex: 1 }]}>
+                  <View style={[styles.dateInputWrapper, { flex: 1 }]}>
                     <TextInput
-                      style={[styles.input, { textAlign: 'center' }]}
+                      style={styles.dateInput}
                       placeholder="DD"
                       placeholderTextColor={Colors.outline}
                       value={day}
@@ -273,9 +271,9 @@ export default function AuthScreen() {
                     />
                   </View>
                   <Text style={styles.dateSeparator}>/</Text>
-                  <View style={[styles.inputWrapper, { flex: 1 }]}>
+                  <View style={[styles.dateInputWrapper, { flex: 1 }]}>
                     <TextInput
-                      style={[styles.input, { textAlign: 'center' }]}
+                      style={styles.dateInput}
                       placeholder="MM"
                       placeholderTextColor={Colors.outline}
                       value={month}
@@ -285,9 +283,9 @@ export default function AuthScreen() {
                     />
                   </View>
                   <Text style={styles.dateSeparator}>/</Text>
-                  <View style={[styles.inputWrapper, { flex: 1.4 }]}>
+                  <View style={[styles.dateInputWrapper, { flex: 1.4 }]}>
                     <TextInput
-                      style={[styles.input, { textAlign: 'center' }]}
+                      style={styles.dateInput}
                       placeholder="AAAA"
                       placeholderTextColor={Colors.outline}
                       value={year}
@@ -460,6 +458,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  dateInputWrapper: {
+    backgroundColor: Colors.surfaceContainer,
+    borderRadius: Radii.lg,
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
+    height: 52,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  dateInput: {
+    width: '100%',
+    textAlign: 'center',
+    color: Colors.onSurface,
+    fontSize: 15,
+    fontWeight: '700',
   },
   dateSeparator: {
     color: Colors.outline,
