@@ -276,15 +276,34 @@ export default function RunningScreen() {
     return () => clearInterval(interval);
   }, [isRunning, runningMode, cacoPhase, walkMinutes, runMinutes, totalIntervals]);
 
-  // Handle adding current location as a Target GPS Point / Waypoint
-  const handleAddCurrentGpsAsTarget = (customCoord?: Coord, customName?: string) => {
-    const pointCoord = customCoord || currentLocation;
+  // Handle adding current location or geocoded place as a Target GPS Point / Waypoint
+  const handleAddCurrentGpsAsTarget = async (customCoord?: Coord, customName?: string) => {
+    let pointCoord: Coord | null = customCoord || currentLocation;
+    const nameInput = (customName || newPointNameInput).trim();
+
+    // Geocode place name if typed by user
+    if (!customCoord && nameInput) {
+      try {
+        setGpsStatus('Buscando coordenadas...');
+        const geocoded = await Location.geocodeAsync(nameInput);
+        if (geocoded && geocoded.length > 0) {
+          pointCoord = {
+            latitude: geocoded[0].latitude,
+            longitude: geocoded[0].longitude,
+          };
+          setCurrentLocation(pointCoord);
+        }
+      } catch (err) {
+        console.warn('Aviso de geocodificación:', err);
+      }
+    }
+
     if (!pointCoord) {
-      Alert.alert('GPS No Fijado', 'Espera a que el GPS obtenga tu ubicación actual.');
+      Alert.alert('GPS No Fijado', 'Espera a que el GPS obtenga tu ubicación o ingresa el nombre de un lugar válido.');
       return;
     }
 
-    const name = customName || newPointNameInput.trim() || `Punto Objetivo #${targetPoints.length + 1}`;
+    const name = nameInput || `Punto Objetivo #${targetPoints.length + 1}`;
     const newPoint: TargetPoint = {
       id: String(Date.now()),
       name,
@@ -294,12 +313,16 @@ export default function RunningScreen() {
 
     setTargetPoints((prev) => [...prev, newPoint]);
     setNewPointNameInput('');
+    setGpsStatus('Punto Objetivo Marcado');
 
     if (Platform.OS !== 'web') {
       Vibration.vibrate(150);
     }
 
-    Alert.alert('Punto GPS Registrado', `Se añadió "${name}" en las coordenadas (${pointCoord.latitude.toFixed(4)}, ${pointCoord.longitude.toFixed(4)}).`);
+    Alert.alert(
+      '¡Punto GPS Marcado en el Mapa!',
+      `Se colocó el marcador "${name}" en las coordenadas (${pointCoord.latitude.toFixed(4)}, ${pointCoord.longitude.toFixed(4)}).`
+    );
   };
 
   const handleRemoveTargetPoint = (id: string) => {
