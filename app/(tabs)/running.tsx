@@ -15,7 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
-import CustomMapView from '@/components/CustomMapView';
+import CustomMapView, { TargetPoint } from '@/components/CustomMapView';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Radii, Spacing } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -114,6 +114,12 @@ export default function RunningScreen() {
   const [gpsStatus, setGpsStatus] = useState<string>('Esperando GPS...');
   const [savingSession, setSavingSession] = useState<boolean>(false);
   const [loadingInitialLocation, setLoadingInitialLocation] = useState<boolean>(true);
+
+  // Objetivo Mode Config State (Distancia Objetivo & Puntos GPS Waypoints)
+  const [objectiveModalVisible, setObjectiveModalVisible] = useState<boolean>(false);
+  const [targetDistance, setTargetDistance] = useState<number>(5.0); // 5.0 km target
+  const [targetPoints, setTargetPoints] = useState<TargetPoint[]>([]);
+  const [newPointNameInput, setNewPointNameInput] = useState<string>('');
 
   // CACO (Caminar-Correr) Interval Engine Config
   const [cacoModalVisible, setCacoModalVisible] = useState<boolean>(false);
@@ -270,6 +276,36 @@ export default function RunningScreen() {
     return () => clearInterval(interval);
   }, [isRunning, runningMode, cacoPhase, walkMinutes, runMinutes, totalIntervals]);
 
+  // Handle adding current location as a Target GPS Point / Waypoint
+  const handleAddCurrentGpsAsTarget = (customCoord?: Coord, customName?: string) => {
+    const pointCoord = customCoord || currentLocation;
+    if (!pointCoord) {
+      Alert.alert('GPS No Fijado', 'Espera a que el GPS obtenga tu ubicación actual.');
+      return;
+    }
+
+    const name = customName || newPointNameInput.trim() || `Punto Objetivo #${targetPoints.length + 1}`;
+    const newPoint: TargetPoint = {
+      id: String(Date.now()),
+      name,
+      latitude: pointCoord.latitude,
+      longitude: pointCoord.longitude,
+    };
+
+    setTargetPoints((prev) => [...prev, newPoint]);
+    setNewPointNameInput('');
+
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate(150);
+    }
+
+    Alert.alert('Punto GPS Registrado', `Se añadió "${name}" en las coordenadas (${pointCoord.latitude.toFixed(4)}, ${pointCoord.longitude.toFixed(4)}).`);
+  };
+
+  const handleRemoveTargetPoint = (id: string) => {
+    setTargetPoints((prev) => prev.filter((p) => p.id !== id));
+  };
+
   // Calculate live pace (min/km)
   const calculatePace = () => {
     if (distance <= 0 || totalSeconds <= 0) return '0:00';
@@ -413,9 +449,19 @@ export default function RunningScreen() {
         distance={distance}
         darkMapStyle={darkMapStyle}
         isRunning={isRunning}
+        targetPoints={targetPoints}
+        onMapPress={(coord) => {
+          if (runningMode === 'objetivo') {
+            handleAddCurrentGpsAsTarget(coord, `Punto Tocado #${targetPoints.length + 1}`);
+          }
+        }}
       />
     );
   };
+
+  // Derived Goal progress metrics
+  const targetPercent = Math.min(100, Math.round((distance / targetDistance) * 100));
+  const remainingDistance = Math.max(0, parseFloat((targetDistance - distance).toFixed(2)));
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -449,10 +495,15 @@ export default function RunningScreen() {
             </Pressable>
             <Pressable
               style={[styles.modeChip, runningMode === 'objetivo' && styles.modeChipSelected]}
-              onPress={() => setRunningMode('objetivo')}>
+              onPress={() => {
+                setRunningMode('objetivo');
+                setObjectiveModalVisible(true);
+              }}>
+              {runningMode === 'objetivo' && <View style={styles.chipActiveDot} />}
               <Text style={[styles.modeChipText, runningMode === 'objetivo' && styles.modeChipTextSelected]}>
-                OBJETIVO
+                OBJETIVO GPS
               </Text>
+              <MaterialIcons name="flag" size={14} color={runningMode === 'objetivo' ? Colors.onPrimaryContainer : Colors.onSurfaceVariant} />
             </Pressable>
             <Pressable
               style={[styles.modeChip, runningMode === 'caco' && styles.modeChipSelected]}
@@ -468,6 +519,40 @@ export default function RunningScreen() {
             </Pressable>
           </ScrollView>
         </View>
+
+        {/* OBJETIVO Mode Goal Progress Banner */}
+        {runningMode === 'objetivo' && (
+          <View style={styles.cacoBanner}>
+            <View style={styles.cacoLeft}>
+              <View style={[styles.cacoPhaseCircle, { backgroundColor: Colors.secondary }]}>
+                <MaterialIcons name="flag" size={20} color={Colors.onPrimaryContainer} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={styles.cacoPhaseTag}>
+                    OBJETIVO: {targetDistance.toFixed(1)} KM • {targetPercent}% COMPLETADO
+                  </Text>
+                  <Text style={[styles.cacoPhaseTag, { color: Colors.secondary }]}>
+                    Faltan {remainingDistance} km
+                  </Text>
+                </View>
+
+                <View style={styles.goalTrack}>
+                  <View style={[styles.goalFill, { width: `${targetPercent}%` }]} />
+                </View>
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 6, marginLeft: 8 }}>
+              <Pressable style={styles.configBtn} onPress={() => handleAddCurrentGpsAsTarget()}>
+                <MaterialIcons name="add-location" size={16} color={Colors.primaryContainer} />
+              </Pressable>
+              <Pressable style={styles.configBtn} onPress={() => setObjectiveModalVisible(true)}>
+                <Text style={styles.configBtnText}>Ajustar</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
 
         {/* CACO Phase Banner Indicator */}
         {runningMode === 'caco' && (
@@ -529,7 +614,11 @@ export default function RunningScreen() {
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.intervalSub}>
-                {runningMode === 'caco' ? `Intervalo ${currentInterval}/${totalIntervals}` : 'Modo Libre'}
+                {runningMode === 'caco'
+                  ? `Intervalo ${currentInterval}/${totalIntervals}`
+                  : runningMode === 'objetivo'
+                  ? `Objetivo ${targetDistance} km`
+                  : 'Modo Libre'}
               </Text>
               <Text style={styles.intervalTitle}>
                 {runningMode === 'caco' ? (cacoPhase === 'correr' ? 'Trote' : 'Caminata') : 'Carrera'}
@@ -581,9 +670,9 @@ export default function RunningScreen() {
                 <MaterialCommunityIcons name="map-marker-distance" size={18} color={Colors.secondary} />
               </View>
               <View>
-                <Text style={styles.microLabel}>Precisión GPS</Text>
+                <Text style={styles.microLabel}>Puntos Objetivo GPS</Text>
                 <Text style={styles.microVal}>
-                  {coords.length > 0 ? 'Alta (HDOP)' : 'Calibrando'}
+                  {targetPoints.length} marcados
                 </Text>
               </View>
             </View>
@@ -665,6 +754,103 @@ export default function RunningScreen() {
             )}
           </Pressable>
         </View>
+
+        {/* OBJETIVO Configuration Modal */}
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={objectiveModalVisible}
+          onRequestClose={() => setObjectiveModalVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Configurar Objetivo de Carrera</Text>
+                <Pressable onPress={() => setObjectiveModalVisible(false)}>
+                  <MaterialIcons name="close" size={24} color={Colors.onSurface} />
+                </Pressable>
+              </View>
+
+              <Text style={styles.modalDesc}>
+                Define tu distancia meta y añade puntos GPS objetivo (waypoints) en el mapa.
+              </Text>
+
+              {/* Preset Distance Selector */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>SELECCIONAR DISTANCIA META (KM)</Text>
+                <View style={styles.presetRow}>
+                  {[3, 5, 10, 15, 21].map((distVal) => (
+                    <Pressable
+                      key={distVal}
+                      style={[styles.presetChip, targetDistance === distVal && styles.presetChipSelected]}
+                      onPress={() => setTargetDistance(distVal)}>
+                      <Text style={[styles.presetChipText, targetDistance === distVal && styles.presetChipTextSelected]}>
+                        {distVal} KM
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Custom Distance Input */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>O DISTANCIA PERSONALIZADA (KM)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  keyboardType="numeric"
+                  value={String(targetDistance)}
+                  onChangeText={(val) => setTargetDistance(Math.max(0.5, parseFloat(val) || 1.0))}
+                />
+              </View>
+
+              {/* Add Waypoint Section */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>MARCAR NUEVO PUNTO OBJETIVO EN GPS</Text>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TextInput
+                    style={[styles.modalInput, { flex: 1 }]}
+                    placeholder="Ej. Meta Parque / Checkpoint"
+                    placeholderTextColor={Colors.outline}
+                    value={newPointNameInput}
+                    onChangeText={setNewPointNameInput}
+                  />
+                  <Pressable
+                    style={styles.addPointBtn}
+                    onPress={() => handleAddCurrentGpsAsTarget()}>
+                    <MaterialIcons name="add-location" size={18} color={Colors.onPrimaryContainer} />
+                    <Text style={styles.addPointBtnText}>+ Guardar</Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Target Points List */}
+              {targetPoints.length > 0 && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>PUNTOS REGISTRADOS ({targetPoints.length})</Text>
+                  {targetPoints.map((pt) => (
+                    <View key={pt.id} style={styles.pointItemRow}>
+                      <MaterialIcons name="place" size={18} color={Colors.secondary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.pointItemName}>{pt.name}</Text>
+                        <Text style={styles.pointItemCoords}>
+                          {pt.latitude.toFixed(4)}, {pt.longitude.toFixed(4)}
+                        </Text>
+                      </View>
+                      <Pressable onPress={() => handleRemoveTargetPoint(pt.id)}>
+                        <MaterialIcons name="delete-outline" size={20} color={Colors.error} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Pressable
+                style={styles.saveCacoBtn}
+                onPress={() => setObjectiveModalVisible(false)}>
+                <Text style={styles.saveCacoBtnText}>Aplicar Objetivo</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
 
         {/* CACO Configuration Modal */}
         <Modal
@@ -867,11 +1053,26 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 2,
   },
+  goalTrack: {
+    height: 6,
+    backgroundColor: Colors.surfaceContainerHigh,
+    borderRadius: Radii.full,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  goalFill: {
+    height: '100%',
+    backgroundColor: Colors.secondary,
+    borderRadius: Radii.full,
+  },
   configBtn: {
     backgroundColor: Colors.surfaceContainerHigh,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: Radii.full,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   configBtnText: {
     color: Colors.onSurface,
@@ -887,10 +1088,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.borderTranslucent,
-  },
-  webMapContainer: {
-    width: '100%',
-    height: '100%',
   },
   mapLoadingBox: {
     flex: 1,
@@ -1207,6 +1404,63 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: Spacing.md,
     lineHeight: 18,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+  },
+  presetChip: {
+    flex: 1,
+    paddingVertical: 8,
+    backgroundColor: Colors.surfaceContainerLow,
+    borderRadius: Radii.md,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.borderTranslucent,
+  },
+  presetChipSelected: {
+    backgroundColor: Colors.secondary,
+  },
+  presetChipText: {
+    color: Colors.onSurfaceVariant,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  presetChipTextSelected: {
+    color: Colors.onPrimaryContainer,
+    fontWeight: '900',
+  },
+  addPointBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.primaryContainer,
+    paddingHorizontal: 12,
+    borderRadius: Radii.md,
+  },
+  addPointBtnText: {
+    color: Colors.onPrimaryContainer,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  pointItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceContainerLow,
+    padding: Spacing.sm,
+    borderRadius: Radii.md,
+    gap: 8,
+    marginBottom: 6,
+  },
+  pointItemName: {
+    color: Colors.onSurface,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pointItemCoords: {
+    color: Colors.onSurfaceVariant,
+    fontSize: 10,
   },
   inputGroup: {
     marginBottom: Spacing.md,

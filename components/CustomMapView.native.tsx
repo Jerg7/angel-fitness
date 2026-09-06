@@ -8,12 +8,21 @@ export interface Coord {
   longitude: number;
 }
 
+export interface TargetPoint {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
 interface CustomMapViewProps {
   currentLocation: Coord;
   coords: Coord[];
   distance: number;
   darkMapStyle: any[];
   isRunning: boolean;
+  targetPoints?: TargetPoint[];
+  onMapPress?: (coord: Coord) => void;
 }
 
 export default function CustomMapView({
@@ -22,6 +31,8 @@ export default function CustomMapView({
   distance,
   darkMapStyle,
   isRunning,
+  targetPoints = [],
+  onMapPress,
 }: CustomMapViewProps) {
   return (
     <MapView
@@ -43,7 +54,12 @@ export default function CustomMapView({
       showsUserLocation={true}
       showsMyLocationButton={true}
       showsCompass={true}
-      followsUserLocation={isRunning}>
+      followsUserLocation={isRunning}
+      onPress={(e) => {
+        if (onMapPress && e.nativeEvent && e.nativeEvent.coordinate) {
+          onMapPress(e.nativeEvent.coordinate);
+        }
+      }}>
       {coords.length > 1 && (
         <Polyline
           coordinates={coords}
@@ -51,11 +67,24 @@ export default function CustomMapView({
           strokeWidth={5}
         />
       )}
+      
+      {/* Current location user marker */}
       <Marker
         coordinate={currentLocation}
-        title="Tu Ubicación"
+        title="Tu Ubicación Actual"
         description={`${distance.toFixed(2)} km recorridos`}
       />
+
+      {/* Target Points / Waypoint Markers */}
+      {targetPoints.map((point) => (
+        <Marker
+          key={point.id}
+          coordinate={{ latitude: point.latitude, longitude: point.longitude }}
+          title={`Punto Objetivo: ${point.name}`}
+          description={`Meta GPS (${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)})`}
+          pinColor="#F59E0B"
+        />
+      ))}
     </MapView>
   );
 }

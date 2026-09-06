@@ -7,12 +7,21 @@ export interface Coord {
   longitude: number;
 }
 
-interface CustomMapViewProps {
+export interface TargetPoint {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface CustomMapViewProps {
   currentLocation: Coord;
   coords?: Coord[];
   distance?: number;
   darkMapStyle?: any[];
   isRunning?: boolean;
+  targetPoints?: TargetPoint[];
+  onMapPress?: (coord: Coord) => void;
 }
 
 export default function CustomMapView({
