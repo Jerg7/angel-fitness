@@ -108,6 +108,7 @@ export default function RunningScreen() {
 
   // GPS Telemetry & Current Location State
   const [currentLocation, setCurrentLocation] = useState<Coord | null>(null);
+  const [mapCenter, setMapCenter] = useState<Coord | null>(null);
   const [coords, setCoords] = useState<Coord[]>([]);
   const [distance, setDistance] = useState<number>(0.0);
   const [calories, setCalories] = useState<number>(0);
@@ -117,9 +118,71 @@ export default function RunningScreen() {
 
   // Objetivo Mode Config State (Distancia Objetivo & Puntos GPS Waypoints)
   const [objectiveModalVisible, setObjectiveModalVisible] = useState<boolean>(false);
-  const [targetDistance, setTargetDistance] = useState<number>(5.0); // 5.0 km target
+  const [targetDestination, setTargetDestination] = useState<TargetPoint | null>(null);
   const [targetPoints, setTargetPoints] = useState<TargetPoint[]>([]);
+  const [targetRouteCoords, setTargetRouteCoords] = useState<Coord[]>([]);
   const [newPointNameInput, setNewPointNameInput] = useState<string>('');
+
+  // Initial distance calculation ref for destination route
+  const initialDistanceToTarget = useRef<number>(0);
+
+  // Fetch real street routing path via OSRM foot routing engine
+  const fetchRealStreetRoute = async (start: Coord, dest: Coord) => {
+    try {
+      setGpsStatus('Trazando ruta por calles...');
+      const url = `https://router.project-osrm.org/route/v1/foot/${start.longitude},${start.latitude};${dest.longitude},${dest.latitude}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.routes && data.routes.length > 0) {
+          const rawCoords = data.routes[0].geometry.coordinates;
+          const parsedRoute: Coord[] = rawCoords.map((c: [number, number]) => ({
+            latitude: c[1],
+            longitude: c[0],
+          }));
+          setTargetRouteCoords(parsedRoute);
+          const routeDistanceKm = data.routes[0].distance / 1000;
+          initialDistanceToTarget.current = routeDistanceKm;
+          setGpsStatus(`Ruta por calles (${routeDistanceKm.toFixed(2)} km)`);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Error obteniendo ruta por calles OSRM:', err);
+    }
+    setTargetRouteCoords([start, { latitude: dest.latitude, longitude: dest.longitude }]);
+  };
+
+  useEffect(() => {
+    if (targetDestination && currentLocation) {
+      const dist = getHaversineDistance(
+        currentLocation.latitude,
+        currentLocation.longitude,
+        targetDestination.latitude,
+        targetDestination.longitude
+      );
+      if (initialDistanceToTarget.current === 0 || initialDistanceToTarget.current < dist) {
+        initialDistanceToTarget.current = dist;
+      }
+    } else if (!targetDestination) {
+      initialDistanceToTarget.current = 0;
+    }
+  }, [targetDestination]);
+
+  const remainingDistanceToTarget = targetDestination && currentLocation
+    ? getHaversineDistance(
+        currentLocation.latitude,
+        currentLocation.longitude,
+        targetDestination.latitude,
+        targetDestination.longitude
+      )
+    : 0;
+
+  const totalTargetDistance = initialDistanceToTarget.current || remainingDistanceToTarget || 1;
+  const distanceCoveredToTarget = Math.max(0, totalTargetDistance - remainingDistanceToTarget);
+  const targetPercent = targetDestination
+    ? Math.min(100, Math.round((distanceCoveredToTarget / totalTargetDistance) * 100))
+    : 0;
 
   // Autocomplete Place Suggestions State (Estilo Google Maps)
   const [placeSuggestions, setPlaceSuggestions] = useState<Array<{ place_id: string; display_name: string; lat: string; lon: string }>>([]);
@@ -209,6 +272,7 @@ export default function RunningScreen() {
           longitude: loc.coords.longitude,
         };
         setCurrentLocation(initCoord);
+        setMapCenter((prev) => prev || initCoord);
         setCoords((prev) => (prev.length === 0 ? [initCoord] : prev));
         setGpsStatus('GPS 5G • Listo');
       } else {
@@ -319,68 +383,117 @@ export default function RunningScreen() {
     return () => clearInterval(interval);
   }, [isRunning, runningMode, cacoPhase, walkMinutes, runMinutes, totalIntervals]);
 
-  // Handle adding current location or geocoded place as a Target GPS Point / Waypoint
-  const handleAddCurrentGpsAsTarget = async (customCoord?: Coord, customName?: string) => {
-    let pointCoord: Coord | null = customCoord || currentLocation;
-    const nameInput = (customName || newPointNameInput).trim();
-
-    // Geocode place name if typed by user and not selected via suggestion
-    if (!customCoord && nameInput) {
-      try {
-        setGpsStatus('Buscando coordenadas...');
-        const geocoded = await Location.geocodeAsync(nameInput);
-        if (geocoded && geocoded.length > 0) {
-          pointCoord = {
-            latitude: geocoded[0].latitude,
-            longitude: geocoded[0].longitude,
-          };
-          setCurrentLocation(pointCoord);
-        }
-      } catch (err) {
-        console.warn('Aviso de geocodificación:', err);
-      }
-    }
-
-    if (!pointCoord) {
-      Alert.alert('GPS No Fijado', 'Espera a que el GPS obtenga tu ubicación o ingresa el nombre de un lugar válido.');
+  // Handle selecting a place from Google Maps-style autocomplete dropdown
+  const handleSelectPlaceSuggestion = (item: { display_name: string; lat: string; lon: string }) => {
+    const lat = parseFloat(item.lat);
+    const lon = parseFloat(item.lon);
+    if (isNaN(lat) || isNaN(lon)) {
+      Alert.alert('Ubicación No Válida', 'No se pudieron extraer las coordenadas del lugar seleccionado.');
       return;
     }
 
-    const name = nameInput || `Punto Objetivo #${targetPoints.length + 1}`;
-    const newPoint: TargetPoint = {
+    const shortName = item.display_name.split(',')[0] || 'Lugar Seleccionado';
+    const pointCoord = { latitude: lat, longitude: lon };
+
+    const newTarget: TargetPoint = {
       id: String(Date.now()),
-      name,
-      latitude: pointCoord.latitude,
-      longitude: pointCoord.longitude,
+      name: shortName,
+      latitude: lat,
+      longitude: lon,
     };
 
-    setTargetPoints((prev) => [...prev, newPoint]);
+    setTargetDestination(newTarget);
+    setTargetPoints([newTarget]);
+
+    // Fetch real street routing from current user location to target
+    if (currentLocation) {
+      fetchRealStreetRoute(currentLocation, pointCoord);
+      const midLat = (currentLocation.latitude + lat) / 2;
+      const midLon = (currentLocation.longitude + lon) / 2;
+      setMapCenter({ latitude: midLat, longitude: midLon });
+    } else {
+      setMapCenter(pointCoord);
+    }
+
     setNewPointNameInput('');
     setPlaceSuggestions([]);
-    setGpsStatus('Punto Objetivo Marcado');
+    setGpsStatus(`Ruta hacia: ${shortName}`);
+    setObjectiveModalVisible(false);
+
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate(150);
+    }
+
+    const distFromStart = currentLocation
+      ? getHaversineDistance(currentLocation.latitude, currentLocation.longitude, lat, lon).toFixed(2)
+      : '0.00';
+
+    Alert.alert(
+      '¡Ruta GPS Trazada!',
+      `Se ha trazado la ruta desde tu ubicación actual hasta "${shortName}" (${distFromStart} km).`
+    );
+  };
+
+  // Add target from search input text or current device location
+  const handleAddTargetFromInputOrGps = async () => {
+    const query = newPointNameInput.trim();
+
+    // 1. If text is entered in search box, search for matching location
+    if (query.length > 0) {
+      if (placeSuggestions.length > 0) {
+        handleSelectPlaceSuggestion(placeSuggestions[0]);
+        return;
+      }
+
+      try {
+        setGpsStatus('Buscando coordenadas...');
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`,
+          { headers: { 'User-Agent': 'AngelFitnessApp/1.0' } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            handleSelectPlaceSuggestion(data[0]);
+            return;
+          }
+        }
+        Alert.alert('Lugar No Encontrado', `No se encontraron coordenadas para "${query}". Intenta seleccionar una opción del desplegable.`);
+      } catch (err) {
+        console.warn('Error al buscar lugar:', err);
+        Alert.alert('Error de Búsqueda', 'Comprueba tu conexión a internet para buscar este lugar.');
+      }
+      return;
+    }
+
+    // 2. If search text is empty, mark current device GPS location
+    if (!currentLocation) {
+      Alert.alert('GPS No Fijado', 'Espera a que el GPS obtenga tu posición o escribe el nombre de un lugar en el buscador.');
+      return;
+    }
+
+    const name = `Punto GPS Actual`;
+    const newTarget: TargetPoint = {
+      id: String(Date.now()),
+      name,
+      latitude: currentLocation.latitude,
+      longitude: currentLocation.longitude,
+    };
+
+    setTargetDestination(newTarget);
+    setTargetPoints([newTarget]);
+    setMapCenter(currentLocation);
+    setGpsStatus('Destino: Ubicación Actual');
+    setObjectiveModalVisible(false);
 
     if (Platform.OS !== 'web') {
       Vibration.vibrate(150);
     }
 
     Alert.alert(
-      '¡Punto GPS Marcado en el Mapa!',
-      `Se colocó el marcador "${name}" en las coordenadas (${pointCoord.latitude.toFixed(4)}, ${pointCoord.longitude.toFixed(4)}).`
+      '¡Destino Fijado!',
+      `Se ha fijado tu ubicación GPS actual como destino.`
     );
-  };
-
-  // Handle selecting a place from Google Maps-style autocomplete dropdown
-  const handleSelectPlaceSuggestion = (item: { display_name: string; lat: string; lon: string }) => {
-    const lat = parseFloat(item.lat);
-    const lon = parseFloat(item.lon);
-    if (isNaN(lat) || isNaN(lon)) return;
-
-    const shortName = item.display_name.split(',')[0] || 'Lugar Seleccionado';
-    const pointCoord = { latitude: lat, longitude: lon };
-
-    setCurrentLocation(pointCoord);
-    handleAddCurrentGpsAsTarget(pointCoord, shortName);
-    setPlaceSuggestions([]);
   };
 
   const handleRemoveTargetPoint = (id: string) => {
@@ -526,23 +639,47 @@ export default function RunningScreen() {
     return (
       <CustomMapView
         currentLocation={currentLocation}
+        mapCenter={mapCenter || currentLocation}
         coords={coords}
         distance={distance}
         darkMapStyle={darkMapStyle}
         isRunning={isRunning}
         targetPoints={targetPoints}
+        targetDestination={targetDestination}
+        targetRouteCoords={targetRouteCoords}
         onMapPress={(coord) => {
           if (runningMode === 'objetivo') {
-            handleAddCurrentGpsAsTarget(coord, `Punto Tocado #${targetPoints.length + 1}`);
+            const pointCoord = { latitude: coord.latitude, longitude: coord.longitude };
+            const newTarget: TargetPoint = {
+              id: String(Date.now()),
+              name: `Punto Tocado en el Mapa`,
+              latitude: coord.latitude,
+              longitude: coord.longitude,
+            };
+            setTargetDestination(newTarget);
+            setTargetPoints([newTarget]);
+            if (currentLocation) {
+              fetchRealStreetRoute(currentLocation, pointCoord);
+              const midLat = (currentLocation.latitude + coord.latitude) / 2;
+              const midLon = (currentLocation.longitude + coord.longitude) / 2;
+              setMapCenter({ latitude: midLat, longitude: midLon });
+            } else {
+              setMapCenter(pointCoord);
+            }
+
+            const distFromStart = currentLocation
+              ? getHaversineDistance(currentLocation.latitude, currentLocation.longitude, coord.latitude, coord.longitude).toFixed(2)
+              : '0.00';
+
+            Alert.alert(
+              '¡Ruta por Calles Trazada!',
+              `Se trazó la ruta real por calles desde tu posición actual hasta el punto tocado (${distFromStart} km).`
+            );
           }
         }}
       />
     );
   };
-
-  // Derived Goal progress metrics
-  const targetPercent = Math.min(100, Math.round((distance / targetDistance) * 100));
-  const remainingDistance = Math.max(0, parseFloat((targetDistance - distance).toFixed(2)));
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -582,9 +719,9 @@ export default function RunningScreen() {
               }}>
               {runningMode === 'objetivo' && <View style={styles.chipActiveDot} />}
               <Text style={[styles.modeChipText, runningMode === 'objetivo' && styles.modeChipTextSelected]}>
-                OBJETIVO GPS
+                RUTA A DESTINO
               </Text>
-              <MaterialIcons name="flag" size={14} color={runningMode === 'objetivo' ? Colors.onPrimaryContainer : Colors.onSurfaceVariant} />
+              <MaterialIcons name="navigation" size={14} color={runningMode === 'objetivo' ? Colors.onPrimaryContainer : Colors.onSurfaceVariant} />
             </Pressable>
             <Pressable
               style={[styles.modeChip, runningMode === 'caco' && styles.modeChipSelected]}
@@ -606,21 +743,29 @@ export default function RunningScreen() {
           <View style={styles.cacoBanner}>
             <View style={styles.cacoLeft}>
               <View style={[styles.cacoPhaseCircle, { backgroundColor: Colors.secondary }]}>
-                <MaterialIcons name="flag" size={20} color={Colors.onPrimaryContainer} />
+                <MaterialIcons name="navigation" size={20} color={Colors.onPrimaryContainer} />
               </View>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={styles.cacoPhaseTag}>
-                    OBJETIVO: {targetDistance.toFixed(1)} KM • {targetPercent}% COMPLETADO
+                    {targetDestination ? `DESTINO: ${targetDestination.name.toUpperCase()}` : 'SELECCIONA UN DESTINO'}
                   </Text>
-                  <Text style={[styles.cacoPhaseTag, { color: Colors.secondary }]}>
-                    Faltan {remainingDistance} km
-                  </Text>
+                  {targetDestination && (
+                    <Text style={[styles.cacoPhaseTag, { color: Colors.secondary }]}>
+                      Faltan {remainingDistanceToTarget.toFixed(2)} km
+                    </Text>
+                  )}
                 </View>
 
-                <View style={styles.goalTrack}>
-                  <View style={[styles.goalFill, { width: `${targetPercent}%` }]} />
-                </View>
+                {targetDestination ? (
+                  <View style={styles.goalTrack}>
+                    <View style={[styles.goalFill, { width: `${targetPercent}%` }]} />
+                  </View>
+                ) : (
+                  <Text style={{ color: Colors.outline, fontSize: 11, marginTop: 2 }}>
+                    Busca un lugar en el buscador para trazar la ruta
+                  </Text>
+                )}
               </View>
             </View>
 
@@ -696,7 +841,9 @@ export default function RunningScreen() {
                 {runningMode === 'caco'
                   ? `Intervalo ${currentInterval}/${totalIntervals}`
                   : runningMode === 'objetivo'
-                  ? `Objetivo ${targetDistance} km`
+                  ? targetDestination
+                    ? `Faltan ${remainingDistanceToTarget.toFixed(2)} km`
+                    : 'Sin Destino'
                   : 'Modo Libre'}
               </Text>
               <Text style={styles.intervalTitle}>
@@ -898,41 +1045,21 @@ export default function RunningScreen() {
                 )}
               </View>
 
-              {/* Preset Distance Selector */}
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>SELECCIONAR DISTANCIA META (KM)</Text>
-                <View style={styles.presetRow}>
-                  {[3, 5, 10, 15, 21].map((distVal) => (
-                    <Pressable
-                      key={distVal}
-                      style={[styles.presetChip, targetDistance === distVal && styles.presetChipSelected]}
-                      onPress={() => setTargetDistance(distVal)}>
-                      <Text style={[styles.presetChipText, targetDistance === distVal && styles.presetChipTextSelected]}>
-                        {distVal} KM
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-
-              {/* Custom Distance Input */}
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>O DISTANCIA PERSONALIZADA (KM)</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  keyboardType="numeric"
-                  value={String(targetDistance)}
-                  onChangeText={(val) => setTargetDistance(Math.max(0.5, parseFloat(val) || 1.0))}
-                />
-              </View>
-
-              {/* Quick Add Current Location Button */}
+              {/* Add Location or Target Button */}
               <View style={styles.inputGroup}>
                 <Pressable
                   style={styles.addPointBtnFull}
-                  onPress={() => handleAddCurrentGpsAsTarget()}>
-                  <MaterialIcons name="my-location" size={18} color={Colors.onPrimaryContainer} />
-                  <Text style={styles.addPointBtnText}>+ Marcar Mi Ubicación GPS Actual</Text>
+                  onPress={handleAddTargetFromInputOrGps}>
+                  <MaterialIcons
+                    name={newPointNameInput.trim().length > 0 ? 'navigation' : 'my-location'}
+                    size={18}
+                    color="#0A0E17"
+                  />
+                  <Text style={styles.addPointBtnText}>
+                    {newPointNameInput.trim().length > 0
+                      ? `+ Trazar Ruta a "${newPointNameInput.trim()}"`
+                      : '+ Fijar Mi Ubicación GPS Actual'}
+                  </Text>
                 </Pressable>
               </View>
 
@@ -949,6 +1076,14 @@ export default function RunningScreen() {
                           {pt.latitude.toFixed(4)}, {pt.longitude.toFixed(4)}
                         </Text>
                       </View>
+                      <Pressable
+                        style={{ marginRight: 12 }}
+                        onPress={() => {
+                          setMapCenter({ latitude: pt.latitude, longitude: pt.longitude });
+                          setObjectiveModalVisible(false);
+                        }}>
+                        <MaterialIcons name="center-focus-strong" size={20} color={Colors.primaryContainer} />
+                      </Pressable>
                       <Pressable onPress={() => handleRemoveTargetPoint(pt.id)}>
                         <MaterialIcons name="delete-outline" size={20} color={Colors.error} />
                       </Pressable>
@@ -1592,16 +1727,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Colors.surfaceBright,
-    paddingVertical: 12,
+    backgroundColor: Colors.primaryContainer,
+    paddingVertical: 14,
     borderRadius: Radii.lg,
-    borderWidth: 1,
-    borderColor: Colors.activeBorderTranslucent,
   },
   addPointBtnText: {
-    color: Colors.onPrimaryContainer,
-    fontSize: 13,
-    fontWeight: '800',
+    color: '#0A0E17',
+    fontSize: 14,
+    fontWeight: '900',
   },
   pointItemRow: {
     flexDirection: 'row',
@@ -1650,8 +1783,8 @@ const styles = StyleSheet.create({
     marginTop: Spacing.sm,
   },
   saveCacoBtnText: {
-    color: Colors.onPrimaryContainer,
+    color: '#0A0E17',
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '900',
   },
 });

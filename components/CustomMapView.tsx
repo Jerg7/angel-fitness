@@ -16,11 +16,14 @@ export interface TargetPoint {
 
 export interface CustomMapViewProps {
   currentLocation: Coord;
+  mapCenter?: Coord;
   coords?: Coord[];
   distance?: number;
   darkMapStyle?: any[];
   isRunning?: boolean;
   targetPoints?: TargetPoint[];
+  targetDestination?: TargetPoint | null;
+  targetRouteCoords?: Coord[];
   onMapPress?: (coord: Coord) => void;
 }
 
