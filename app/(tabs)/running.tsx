@@ -15,7 +15,7 @@ import {
   Platform,
 } from 'react-native';
 import * as Location from 'expo-location';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import CustomMapView from '@/components/CustomMapView';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { Colors, Radii, Spacing } from '@/constants/theme';
 import { supabase } from '@/lib/supabase';
@@ -406,64 +406,14 @@ export default function RunningScreen() {
       );
     }
 
-    // WEB FALLBACK (OpenStreetMap embed)
-    if (Platform.OS === 'web') {
-      const { latitude, longitude } = currentLocation;
-      const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${longitude - 0.005}%2C${latitude - 0.005}%2C${longitude + 0.005}%2C${latitude + 0.005}&layer=mapnik&marker=${latitude}%2C${longitude}`;
-
-      return (
-        <View style={styles.webMapContainer}>
-          {/* @ts-ignore iframe is supported on web */}
-          <iframe
-            src={mapUrl}
-            style={{
-              width: '100%',
-              height: '100%',
-              border: 0,
-              borderRadius: Radii.xl,
-              filter: 'invert(90%) hue-rotate(180deg) brightness(95%) contrast(90%)',
-            }}
-            title="OpenStreetMap Web"
-          />
-        </View>
-      );
-    }
-
-    // NATIVE MAP (iOS / Android react-native-maps)
     return (
-      <MapView
-        style={StyleSheet.absoluteFill}
-        provider={PROVIDER_DEFAULT}
-        customMapStyle={darkMapStyle}
-        initialRegion={{
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        }}
-        region={{
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        }}
-        showsUserLocation={true}
-        showsMyLocationButton={true}
-        showsCompass={true}
-        followsUserLocation={isRunning}>
-        {coords.length > 1 && (
-          <Polyline
-            coordinates={coords}
-            strokeColor={Colors.primaryContainer}
-            strokeWidth={5}
-          />
-        )}
-        <Marker
-          coordinate={currentLocation}
-          title="Tu Ubicación"
-          description={`${distance.toFixed(2)} km recorridos`}
-        />
-      </MapView>
+      <CustomMapView
+        currentLocation={currentLocation}
+        coords={coords}
+        distance={distance}
+        darkMapStyle={darkMapStyle}
+        isRunning={isRunning}
+      />
     );
   };
 
